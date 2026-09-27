@@ -13,7 +13,7 @@ public class Thread {
     private final float cpuUsage;
     private final Map<String, String> waitingFor;
     private final ArrayList<String> stacktrace;
-    private final Map<String, String> lockedMonitors;
+    private final ArrayList<Map<String, String>> lockedMonitors;
 
     private Thread(Builder builder) {
         this.name = builder.name;
@@ -28,21 +28,54 @@ public class Thread {
         this.lockedMonitors = builder.lockedMonitors;
     }
 
+
     @Override
     public String toString() {
-        return "Thread{" +
-                "name='" + name + '\'' +
-                ", id=" + id +
-                ", state=" + state +
-                ", daemon=" + daemon +
-                ", system='" + system + '\'' +
-                ", scope='" + scope + '\'' +
-                ", cpuUsage=" + cpuUsage +
-                ", waitingFor=" + waitingFor +
-                ", stacktrace=" + stacktrace +
-                ", lockedMonitors=" + lockedMonitors +
-                '}';
+        StringBuilder sb = new StringBuilder();
+
+        sb.append("Thread {\n");
+        sb.append("name: \"").append(name).append("\"\n");
+        sb.append("id: ").append(id).append("\n");
+        sb.append("state: ").append(state).append("\n");
+        sb.append("daemon: ").append(daemon).append("\n");
+        sb.append("system: \"").append(system).append("\"\n");
+        sb.append("scope: \"").append(scope).append("\"\n");
+        sb.append("cpuUsage: ").append(cpuUsage).append("\n");
+
+        sb.append("waitingFor:\n");
+        if (waitingFor != null) {
+            for (Map.Entry<String, String> entry : waitingFor.entrySet()) {
+                sb.append(entry.getKey())
+                        .append(": ")
+                        .append(entry.getValue())
+                        .append("\n");
+            }
+        }
+
+        sb.append("stacktrace:\n");
+        if (stacktrace != null) {
+            for (String frame : stacktrace) {
+                sb.append(frame).append("\n");
+            }
+        }
+
+        sb.append("lockedMonitors:\n");
+        if (lockedMonitors != null) {
+            for (Map<String, String> monitor : lockedMonitors) {
+                for (Map.Entry<String, String> entry : monitor.entrySet()) {
+                    sb.append(entry.getKey())
+                            .append(": ")
+                            .append(entry.getValue())
+                            .append("\n");
+                }
+            }
+        }
+
+        sb.append("}");
+
+        return sb.toString();
     }
+
 
     public static class Builder {
         private String name;
@@ -54,7 +87,7 @@ public class Thread {
         private float cpuUsage;
         private Map<String, String> waitingFor;
         private ArrayList<String> stacktrace;
-        private Map<String, String> lockedMonitors;
+        private ArrayList<Map<String, String>> lockedMonitors;
 
         public Builder name(String name) {
             this.name = name;
@@ -101,7 +134,9 @@ public class Thread {
             return this;
         }
 
-        public Builder lockedMonitors(Map<String, String> lockedMonitors) {
+        public Builder lockedMonitors(
+                ArrayList<Map<String, String>> lockedMonitors
+        ) {
             this.lockedMonitors = lockedMonitors;
             return this;
         }
