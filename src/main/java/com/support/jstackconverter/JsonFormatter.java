@@ -1,9 +1,6 @@
 package com.support.jstackconverter;
 
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
-import com.google.gson.JsonPrimitive;
-import com.google.gson.JsonSerializer;
+import com.google.gson.*;
 import com.google.gson.stream.JsonWriter;
 
 import java.io.IOException;
@@ -32,11 +29,17 @@ public class JsonFormatter {
     }
 
     public void write(JstackDump dump, String outputPath) throws IOException {
+        // Build the root object: "version" first, then the dump's "threads"
+        JsonObject root = new JsonObject();
+        root.addProperty("version", "unknown");
+        root.add("threads", gson.toJsonTree(dump).getAsJsonObject().get("threads"));
+
         try (Writer writer = Files.newBufferedWriter(Paths.get(outputPath), StandardCharsets.UTF_8);
              JsonWriter jsonWriter = new JsonWriter(writer)) {
 
             jsonWriter.setIndent("\t");
-            gson.toJson(dump, JstackDump.class, jsonWriter);
+            gson.toJson(root, jsonWriter);
         }
     }
+
 }
