@@ -45,7 +45,8 @@ public class Thread {
         sb.append("waitingFor:\n");
         if (waitingFor != null) {
             for (Map.Entry<String, String> entry : waitingFor.entrySet()) {
-                sb.append(entry.getKey())
+                sb.append("\t")
+                        .append(entry.getKey())
                         .append(": ")
                         .append(entry.getValue())
                         .append("\n");
@@ -55,7 +56,7 @@ public class Thread {
         sb.append("stacktrace:\n");
         if (stacktrace != null) {
             for (String frame : stacktrace) {
-                sb.append(frame).append("\n");
+                sb.append("\t").append(frame).append("\n");
             }
         }
 
@@ -63,7 +64,8 @@ public class Thread {
         if (lockedMonitors != null) {
             for (Map<String, String> monitor : lockedMonitors) {
                 for (Map.Entry<String, String> entry : monitor.entrySet()) {
-                    sb.append(entry.getKey())
+                    sb.append("\t\t")
+                            .append(entry.getKey())
                             .append(": ")
                             .append(entry.getValue())
                             .append("\n");
