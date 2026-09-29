@@ -84,8 +84,8 @@ public class JstackParser {
                 // A new thread starts with a quotation mark
                 if (line.startsWith("\"")) {
 
-                    // Parse the previous thread
-                    if (currThread != null) {
+                    // Parse the previous thread (skip JVM-internal threads with no state)
+                    if (currThread != null && hasThreadState(currThread.toString())) {
                         threads.add(parseThread(currThread.toString()));
                     }
 
@@ -98,13 +98,18 @@ public class JstackParser {
                 }
             }
 
-            // Parse the final thread
-            if (currThread != null) {
+            // Parse the final thread (same check)
+            if (currThread != null && hasThreadState(currThread.toString())) {
                 threads.add(parseThread(currThread.toString()));
             }
         }
 
         return threads;
+    }
+
+    // Only real Java threads have a "java.lang.Thread.State:" line
+    private static boolean hasThreadState(String thread) {
+        return thread.contains("java.lang.Thread.State:");
     }
 
     public Thread parseThread(String thread) {
