@@ -27,7 +27,7 @@ public class JstackParser {
             "^\\s*java\\.lang\\.Thread\\.State:\\s+(\\w+)");
 
     private static final Pattern WAITING_PATTERN = Pattern.compile(
-            "^\\s*-\\s+(?:parking to wait for|waiting to lock|waiting on)\\s+<([^>]+)>\\s+\\(([^)]+)\\)");
+            "^\\s*-\\s+(?:parking to wait for|waiting on)\\s+<([^>]+)>\\s+\\(([^)]+)\\)");
 
     private static final Pattern LOCKED_PATTERN = Pattern.compile(
             "^\\s*-\\s+locked\\s+<([^>]+)>\\s+\\(([^)]+)\\)");
