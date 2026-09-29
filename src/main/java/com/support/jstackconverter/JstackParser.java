@@ -1,6 +1,12 @@
 package com.support.jstackconverter;
 
-import java.io.*;
+import java.io.BufferedReader;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.PushbackInputStream;
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Map;
@@ -9,12 +15,99 @@ import java.util.regex.Pattern;
 
 public class JstackParser {
 
+    // Compiled once instead of on every parseThread call
+    // Header: "name" #52 daemon prio=5 os_prio=0 cpu=203.12ms ...
+    // (#id is optional: JVM-internal threads like "VM Thread" don't have one)
+    private static final Pattern HEADER_PATTERN = Pattern.compile("^\"([^\"]+)\"(.*)$");
+    private static final Pattern ID_PATTERN = Pattern.compile("#(\\d+)");
+    private static final Pattern DAEMON_PATTERN = Pattern.compile("\\sdaemon(\\s|$)");
+    private static final Pattern CPU_PATTERN = Pattern.compile("\\bcpu=([\\d.]+)ms");
+
+    private static final Pattern STATE_PATTERN = Pattern.compile(
+            "^\\s*java\\.lang\\.Thread\\.State:\\s+(\\w+)");
+
+    private static final Pattern WAITING_PATTERN = Pattern.compile(
+            "^\\s*-\\s+(?:parking to wait for|waiting to lock|waiting on)\\s+<([^>]+)>\\s+\\(([^)]+)\\)");
+
+    private static final Pattern LOCKED_PATTERN = Pattern.compile(
+            "^\\s*-\\s+locked\\s+<([^>]+)>\\s+\\(([^)]+)\\)");
+
+    private static final Pattern STACK_PATTERN = Pattern.compile("^\\s*at\\s+(.+)$");
+
     public JstackParser() {
     }
 
-    public Thread parse(String path) throws IOException {
-        String line;
+    /**
+     * Opens the file using the right charset. Thread dumps saved on Windows
+     * (e.g. `jstack <pid> > dump.txt` in PowerShell) are often UTF-16 with a
+     * BOM. FileReader decodes those as single-byte text, which leaves a stray
+     * \0 character after every character and at the start of every line, so
+     * startsWith("\"") fails and every line seems to be followed by an empty one.
+     */
+    private static BufferedReader openReader(String path) throws IOException {
+        PushbackInputStream in = new PushbackInputStream(new FileInputStream(path), 3);
 
+        byte[] bom = new byte[3];
+        int n = in.read(bom, 0, 3);
+
+        Charset charset = StandardCharsets.UTF_8;
+        int skip = 0;
+
+        if (n >= 2 && (bom[0] & 0xFF) == 0xFF && (bom[1] & 0xFF) == 0xFE) {
+            charset = StandardCharsets.UTF_16LE;
+            skip = 2;
+        } else if (n >= 2 && (bom[0] & 0xFF) == 0xFE && (bom[1] & 0xFF) == 0xFF) {
+            charset = StandardCharsets.UTF_16BE;
+            skip = 2;
+        } else if (n >= 3 && (bom[0] & 0xFF) == 0xEF && (bom[1] & 0xFF) == 0xBB && (bom[2] & 0xFF) == 0xBF) {
+            skip = 3; // UTF-8 BOM
+        }
+
+        // Put back any bytes that weren't part of the BOM
+        if (n > skip) {
+            in.unread(bom, skip, n - skip);
+        }
+
+        return new BufferedReader(new InputStreamReader(in, charset));
+    }
+
+    public ArrayList<Thread> parseFile(String path) throws IOException {
+        ArrayList<Thread> threads = new ArrayList<>();
+
+        try (BufferedReader bfro = openReader(path)) {
+            // null means "not inside a thread yet" (skips the dump preamble)
+            StringBuilder currThread = null;
+            String line;
+
+            while ((line = bfro.readLine()) != null) {
+
+                // A new thread starts with a quotation mark
+                if (line.startsWith("\"")) {
+
+                    // Parse the previous thread
+                    if (currThread != null) {
+                        threads.add(parseThread(currThread.toString()));
+                    }
+
+                    currThread = new StringBuilder();
+                }
+
+                // Add the line (including the header line) to the current thread
+                if (currThread != null) {
+                    currThread.append(line).append("\n");
+                }
+            }
+
+            // Parse the final thread
+            if (currThread != null) {
+                threads.add(parseThread(currThread.toString()));
+            }
+        }
+
+        return threads;
+    }
+
+    public Thread parseThread(String thread) {
         String name = null;
         int id = 0;
         ThreadState state = null;
@@ -27,107 +120,78 @@ public class JstackParser {
         ArrayList<String> stacktrace = new ArrayList<>();
         ArrayList<Map<String, String>> lockedMonitors = new ArrayList<>();
 
-        // Locked monitors that are waiting to be associated
-        // with the next stack frame.
-        ArrayList<Map<String, String>> pendingLocks = new ArrayList<>();
+        for (String line : thread.split("\n")) {
 
-        // "platform-scheduled-executor-1" #27 ...
-        Pattern headerPattern = Pattern.compile(
-                "^\"([^\"]+)\"\\s+#(\\d+)"
-        );
+            // Header: name, id, daemon, cpu
+            Matcher matcher = HEADER_PATTERN.matcher(line);
 
-        // java.lang.Thread.State: WAITING (parking)
-        Pattern statePattern = Pattern.compile(
-                "^\\s*java\\.lang\\.Thread\\.State:\\s+(\\w+)"
-        );
+            if (matcher.find()) {
+                name = matcher.group(1);
+                String rest = matcher.group(2);
 
-        // - parking to wait for <0x000000008113c7b8> (a java....ConditionObject)
-        Pattern waitingPattern = Pattern.compile(
-                "^\\s*-\\s+parking to wait for\\s+<([^>]+)>\\s+\\(([^)]+)\\)"
-        );
-
-        // - locked <0x00000000817d1ef0> (a sun.nio.ch.Util$2)
-        Pattern lockedPattern = Pattern.compile(
-                "^\\s*-\\s+locked\\s+<([^>]+)>\\s+\\(([^)]+)\\)"
-        );
-
-        // at java.util.concurrent.locks.LockSupport.park(...)
-        Pattern stackPattern = Pattern.compile(
-                "^\\s*at\\s+(.+)$"
-        );
-
-        try (BufferedReader bfro = new BufferedReader(new FileReader(path))) {
-            while ((line = bfro.readLine()) != null) {
-
-                // Thread name and ID
-                Matcher matcher = headerPattern.matcher(line);
-
-                if (matcher.find()) {
-                    name = matcher.group(1);
-                    id = Integer.parseInt(matcher.group(2));
-
-                    // Daemon if "daemon" appears after the thread ID
-                    daemon = line.matches(
-                            "^\"[^\"]+\"\\s+#\\d+\\s+daemon\\s+.*"
-                    );
+                Matcher idMatcher = ID_PATTERN.matcher(rest);
+                if (idMatcher.find()) {
+                    id = Integer.parseInt(idMatcher.group(1));
                 }
 
-                // Thread state
-                matcher = statePattern.matcher(line);
+                daemon = DAEMON_PATTERN.matcher(rest).find();
 
-                if (matcher.find()) {
+                Matcher cpuMatcher = CPU_PATTERN.matcher(rest);
+                if (cpuMatcher.find()) {
+                    cpuUsage = Float.parseFloat(cpuMatcher.group(1));
+                }
+
+                continue;
+            }
+
+            // Thread state
+            matcher = STATE_PATTERN.matcher(line);
+
+            if (matcher.find()) {
+                try {
                     state = ThreadState.valueOf(matcher.group(1));
+                } catch (IllegalArgumentException e) {
+                    // Unknown state name; leave as null
+                }
+                continue;
+            }
+
+            // Waiting for lock
+            matcher = WAITING_PATTERN.matcher(line);
+
+            if (matcher.find()) {
+                String address = matcher.group(1).replaceFirst("^0x", "");
+                String type = matcher.group(2);
+
+                waitingFor.put("lock", type + "@" + address);
+                continue;
+            }
+
+            // Locked monitor. In a jstack dump, a "- locked" line comes right
+            // AFTER the frame in which the lock was taken, so tie it to the
+            // most recent stack frame.
+            matcher = LOCKED_PATTERN.matcher(line);
+
+            if (matcher.find()) {
+                String address = matcher.group(1).replaceFirst("^0x", "");
+                String type = matcher.group(2);
+
+                Map<String, String> monitor = new HashMap<>();
+                monitor.put("lock", type + "@" + address);
+
+                if (!stacktrace.isEmpty()) {
+                    monitor.put("frame", stacktrace.get(stacktrace.size() - 1));
                 }
 
-                // Waiting for lock
-                matcher = waitingPattern.matcher(line);
+                lockedMonitors.add(monitor);
+                continue;
+            }
 
-                if (matcher.find()) {
-                    String address = matcher.group(1);
-                    String type = matcher.group(2);
+            // Stack trace
+            matcher = STACK_PATTERN.matcher(line);
 
-                    address = address.replaceFirst("^0x", "");
-
-                    waitingFor.put(
-                            "lock",
-                            type + "@" + address
-                    );
-                }
-
-                // Locked monitor
-                matcher = lockedPattern.matcher(line);
-
-                if (matcher.find()) {
-                    String address = matcher.group(1);
-                    String type = matcher.group(2);
-
-                    address = address.replaceFirst("^0x", "");
-
-                    Map<String, String> monitor = new HashMap<>();
-                    monitor.put("lock", type + "@" + address);
-
-                    pendingLocks.add(monitor);
-
-                    continue;
-                }
-
-                // Stack trace
-                matcher = stackPattern.matcher(line);
-
-                if (matcher.find()) {
-                    String frame = matcher.group(1);
-
-                    stacktrace.add(frame);
-
-                    // Locked monitors are associated with the
-                    // stack frame immediately following them.
-                    for (Map<String, String> monitor : pendingLocks) {
-                        monitor.put("frame", frame);
-                        lockedMonitors.add(monitor);
-                    }
-
-                    pendingLocks.clear();
-                }
+            if (matcher.find()) {
+                stacktrace.add(matcher.group(1));
             }
         }
 

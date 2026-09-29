@@ -72,6 +72,7 @@ public class Thread {
         }
 
         sb.append("}");
+        sb.append("\n\n");
 
         return sb.toString();
     }

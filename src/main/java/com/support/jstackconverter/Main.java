@@ -1,14 +1,18 @@
 package com.support.jstackconverter;
 
 import java.io.IOException;
+import java.util.ArrayList;
 
 
 public class Main {
     public static void main(String[] args) throws IOException {
 
         JstackParser parser = new JstackParser();
-        Thread thread = parser.parse("/home/jelliedsquash/Downloads/test_unit.txt");
-        System.out.print(thread.toString());
+        ArrayList<Thread> threads = parser.parseFile("C:/Users/nickr/Documents/jstack.txt");
+        for(Thread thread : threads){
+            System.out.print(thread.toString());
+        }
+
 
 //        JStackParser parser = new JStackParser();
 //        JStack jstack = parser.parse(inputFile);
