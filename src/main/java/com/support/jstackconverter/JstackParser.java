@@ -15,13 +15,12 @@ import java.util.regex.Pattern;
 
 public class JstackParser {
 
-    // Compiled once instead of on every parseThread call
     // Header: "name" #52 daemon prio=5 os_prio=0 cpu=203.12ms ...
     // (#id is optional: JVM-internal threads like "VM Thread" don't have one)
     private static final Pattern HEADER_PATTERN = Pattern.compile("^\"([^\"]+)\"(.*)$");
     private static final Pattern ID_PATTERN = Pattern.compile("#(\\d+)");
     private static final Pattern DAEMON_PATTERN = Pattern.compile("\\sdaemon(\\s|$)");
-    private static final Pattern CPU_PATTERN = Pattern.compile("\\bcpu=([\\d.]+)ms");
+    // private static final Pattern CPU_PATTERN = Pattern.compile("\\bcpu=([\\d.]+)ms"); // doesn't get used
 
     private static final Pattern STATE_PATTERN = Pattern.compile(
             "^\\s*java\\.lang\\.Thread\\.State:\\s+(\\w+)");
@@ -85,7 +84,6 @@ public class JstackParser {
         ArrayList<Thread> threads = new ArrayList<>();
 
         try (BufferedReader bfro = openReader(path)) {
-            // null means "not inside a thread yet" (skips the dump preamble)
             StringBuilder currThread = null;
             String line;
 
@@ -94,7 +92,7 @@ public class JstackParser {
                 // A new thread starts with a quotation mark
                 if (line.startsWith("\"")) {
 
-                    // Parse the previous thread (skip JVM-internal threads with no state)
+                    // Parse the previous thread and skip any thread with no internal state (JVM threads at the end of a dump)
                     if (currThread != null && hasThreadState(currThread.toString())) {
                         threads.add(parseThread(currThread.toString()));
                     }
@@ -108,7 +106,7 @@ public class JstackParser {
                 }
             }
 
-            // Parse the final thread (same check)
+            // Parse the final thread (this is needed because the above code only knows it's hit the end of a thread by finding the next quotation mark)
             if (currThread != null && hasThreadState(currThread.toString())) {
                 threads.add(parseThread(currThread.toString()));
             }
@@ -172,11 +170,6 @@ public class JstackParser {
 
                 daemon = DAEMON_PATTERN.matcher(rest).find();
 
-                Matcher cpuMatcher = CPU_PATTERN.matcher(rest);
-                if (cpuMatcher.find()) {
-                    cpuUsage = Float.parseFloat(cpuMatcher.group(1));
-                }
-
                 continue;
             }
 
@@ -212,6 +205,20 @@ public class JstackParser {
             // Locked monitor. In a jstack dump, a "- locked" line comes right
             // AFTER the frame in which the lock was taken, so tie it to the
             // most recent stack frame.
+            // e.g.
+            // at sun.nio.ch.SelectorImpl.lockAndDoSelect(java.base@17.0.19/Unknown Source)
+            //	- locked <0x0000000081a9d6a8> (a io.netty.channel.nio.SelectedSelectionKeySet)
+            //	- locked <0x0000000081a9e6d0> (a sun.nio.ch.WEPollSelectorImpl)
+            // would be
+            //	{
+            //		"lock": "sun.nio.ch.Util$2@673a9020",
+            //		"frame": "java.base@17.0.19/sun.nio.ch.SelectorImpl.lockAndDoSelect(Unknown Source)"
+            //	},
+            //	{
+            //		"lock": "sun.nio.ch.WEPollSelectorImpl@4dfe6050",
+            //		"frame": "java.base@17.0.19/sun.nio.ch.SelectorImpl.lockAndDoSelect(Unknown Source)"
+            //	}
+            //
             matcher = LOCKED_PATTERN.matcher(line);
 
             if (matcher.find()) {
