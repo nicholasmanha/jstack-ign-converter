@@ -29,6 +29,11 @@ public class JstackParser {
     private static final Pattern WAITING_PATTERN = Pattern.compile(
             "^\\s*-\\s+(?:parking to wait for|waiting on)\\s+<([^>]+)>\\s+\\(([^)]+)\\)");
 
+    // "- waiting on <no object reference available>": the object isn't named,
+    // so the lock is taken from the "- locked" line that follows
+    private static final Pattern WAITING_UNKNOWN_PATTERN = Pattern.compile(
+            "^\\s*-\\s+waiting on\\s+<no object reference available>");
+
     private static final Pattern LOCKED_PATTERN = Pattern.compile(
             "^\\s*-\\s+locked\\s+<([^>]+)>\\s+\\(([^)]+)\\)");
 
@@ -131,6 +136,11 @@ public class JstackParser {
         return frame;
     }
 
+    // jstack prints types as "(a java.lang.Object)"; drop the leading "a "/"an "
+    private static String cleanType(String type) {
+        return type.replaceFirst("^an?\\s+", "");
+    }
+
     public Thread parseThread(String thread) {
         String name = null;
         int id = 0;
@@ -143,6 +153,8 @@ public class JstackParser {
         Map<String, String> waitingFor = new HashMap<>();
         ArrayList<String> stacktrace = new ArrayList<>();
         ArrayList<Map<String, String>> lockedMonitors = new ArrayList<>();
+
+        boolean waitingOnUnknown = false;
 
         for (String line : thread.split("\n")) {
 
@@ -185,9 +197,15 @@ public class JstackParser {
 
             if (matcher.find()) {
                 String address = matcher.group(1).replaceFirst("^0x0*(?=.)", "");
-                String type = matcher.group(2);
+                String type = cleanType(matcher.group(2));
 
                 waitingFor.put("lock", type + "@" + address);
+                continue;
+            }
+
+            // Waiting on an unnamed object: resolve it from the next "- locked" line
+            if (WAITING_UNKNOWN_PATTERN.matcher(line).find()) {
+                waitingOnUnknown = true;
                 continue;
             }
 
@@ -198,10 +216,16 @@ public class JstackParser {
 
             if (matcher.find()) {
                 String address = matcher.group(1).replaceFirst("^0x0*(?=.)", "");
-                String type = matcher.group(2);
+                String type = cleanType(matcher.group(2));
+                String lock = type + "@" + address;
+
+                if (waitingOnUnknown && waitingFor.isEmpty()) {
+                    waitingFor.put("lock", lock);
+                    waitingOnUnknown = false;
+                }
 
                 Map<String, String> monitor = new HashMap<>();
-                monitor.put("lock", type + "@" + address);
+                monitor.put("lock", lock);
 
                 if (!stacktrace.isEmpty()) {
                     monitor.put("frame", stacktrace.get(stacktrace.size() - 1));
