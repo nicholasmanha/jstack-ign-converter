@@ -34,6 +34,11 @@ public class JstackParser {
 
     private static final Pattern STACK_PATTERN = Pattern.compile("^\\s*at\\s+(.+)$");
 
+    // Frame with a module inside the parens, e.g.
+    // java.lang.Object.wait(java.base@17.0.19/Native Method)
+    private static final Pattern MODULE_FRAME_PATTERN = Pattern.compile(
+            "^(.+?)\\(([^()/]+)/([^()]*)\\)$");
+
     public JstackParser() {
     }
 
@@ -112,6 +117,20 @@ public class JstackParser {
         return thread.contains("java.lang.Thread.State:");
     }
 
+    // Moves the module prefix to the front:
+    // java.lang.Object.wait(java.base@17.0.19/Native Method)
+    //   -> java.base@17.0.19/java.lang.Object.wait(Native Method)
+    // Frames without a module (e.g. org.eclipse.jetty...(Foo.java:12)) are unchanged.
+    private static String formatFrame(String frame) {
+        Matcher m = MODULE_FRAME_PATTERN.matcher(frame);
+
+        if (m.matches()) {
+            return m.group(2) + "/" + m.group(1) + "(" + m.group(3) + ")";
+        }
+
+        return frame;
+    }
+
     public Thread parseThread(String thread) {
         String name = null;
         int id = 0;
@@ -165,7 +184,7 @@ public class JstackParser {
             matcher = WAITING_PATTERN.matcher(line);
 
             if (matcher.find()) {
-                String address = matcher.group(1).replaceFirst("^0x", "");
+                String address = matcher.group(1).replaceFirst("^0x0*(?=.)", "");
                 String type = matcher.group(2);
 
                 waitingFor.put("lock", type + "@" + address);
@@ -178,7 +197,7 @@ public class JstackParser {
             matcher = LOCKED_PATTERN.matcher(line);
 
             if (matcher.find()) {
-                String address = matcher.group(1).replaceFirst("^0x", "");
+                String address = matcher.group(1).replaceFirst("^0x0*(?=.)", "");
                 String type = matcher.group(2);
 
                 Map<String, String> monitor = new HashMap<>();
@@ -196,7 +215,7 @@ public class JstackParser {
             matcher = STACK_PATTERN.matcher(line);
 
             if (matcher.find()) {
-                stacktrace.add(matcher.group(1));
+                stacktrace.add(formatFrame(matcher.group(1)));
             }
         }
 
@@ -204,7 +223,8 @@ public class JstackParser {
             waitingFor = null;
         }
 
-        if (lockedMonitors.isEmpty()) {
+        // A thread that is waiting on a lock doesn't report locked monitors
+        if (waitingFor != null || lockedMonitors.isEmpty()) {
             lockedMonitors = null;
         }
 
