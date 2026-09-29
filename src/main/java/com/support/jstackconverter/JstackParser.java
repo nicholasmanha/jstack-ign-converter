@@ -80,8 +80,8 @@ public class JstackParser {
         return new BufferedReader(new InputStreamReader(in, charset));
     }
 
-    public ArrayList<Thread> parseFile(String path) throws IOException {
-        ArrayList<Thread> threads = new ArrayList<>();
+    public JstackDump parseFile(String path) throws IOException {
+        JstackDump threads = new JstackDump();
 
         try (BufferedReader bfro = openReader(path)) {
             StringBuilder currThread = null;
@@ -94,7 +94,7 @@ public class JstackParser {
 
                     // Parse the previous thread and skip any thread with no internal state (JVM threads at the end of a dump)
                     if (currThread != null && hasThreadState(currThread.toString())) {
-                        threads.add(parseThread(currThread.toString()));
+                        threads.addThread(parseThread(currThread.toString()));
                     }
 
                     currThread = new StringBuilder();
@@ -108,7 +108,7 @@ public class JstackParser {
 
             // Parse the final thread (this is needed because the above code only knows it's hit the end of a thread by finding the next quotation mark)
             if (currThread != null && hasThreadState(currThread.toString())) {
-                threads.add(parseThread(currThread.toString()));
+                threads.addThread(parseThread(currThread.toString()));
             }
         }
 
